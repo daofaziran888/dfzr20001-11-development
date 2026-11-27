@@ -1,4 +1,10 @@
-"""不合格处置领域服务：记录缺陷、触发冻结、关联发现节点与处置方式。"""
+"""不合格处置领域服务：记录缺陷、触发冻结、关联发现节点与处置方式。
+
+关闭规则与复检授权联动：
+- 包装类缺陷没有生效的复检通过凭据时，不允许关闭；
+- 关闭时把生效凭据（结论签发人、资格、实物领出/归还人）固化到缺陷上，便于重新打开后核对；
+- 已关闭缺陷可重新打开为草稿，历史凭据保留可查，重复复检不会产生第二份有效关闭记录。
+"""
 from __future__ import annotations
 from typing import Any
 from app.services.base import BaseModuleService
@@ -34,6 +40,15 @@ class DefectService(BaseModuleService):
     def on_confirm(self, entry: dict[str, Any], action: str) -> tuple[bool, str | None]:
         """不合格处置确认时，自动冻结同批次发现节点之后的下游记录。"""
         if action == "关闭缺陷":
+            # 包装类缺陷必须持有生效的复检通过凭据
+            from app.services.reinspection import reinspection as rs
+            if rs.is_packaging_defect(entry):
+                snapshot = rs.credential_snapshot(int(entry["id"]))
+                if snapshot is None:
+                    return False, ("包装缺陷没有任何有效复检凭据，不能关闭；"
+                                   "请先由内审巡查签发复检授权并取得「通过」结论")
+                entry["复检关闭凭据"] = snapshot
+
             batch_no = entry.get("批次号", "")
             reason = entry.get("缺陷类型", "不合格")
             discovered = entry.get("发现节点", "")
@@ -42,6 +57,28 @@ class DefectService(BaseModuleService):
                 count, keys = pl.freeze_batch_downstream(batch_no, int(entry["id"]), reason)
                 entry["冻结记录数"] = count
         return True, None
+
+    def reopen_defect(self, defect_id: int,
+                      operator: str | None = None) -> tuple[dict[str, Any] | None, str]:
+        """重新打开已关闭的缺陷为草稿，保留当时的复检凭据与操作责任人供核对。"""
+        entry = store.find(self.MODULE, defect_id)
+        if entry is None:
+            return None, f"缺陷记录 {defect_id} 不存在或已归档"
+        if entry.get("status") != "已确认":
+            return None, f"缺陷当前状态为「{entry.get('status')}」，只有已关闭缺陷可以重新打开"
+
+        previous_credential = entry.get("复检关闭凭据")
+        history: list[dict[str, Any]] = entry.setdefault("关闭凭据历史", [])
+        if previous_credential and previous_credential not in history:
+            history.append(dict(previous_credential))
+
+        entry["status"] = "草稿"
+        entry["pending"] = True
+        store.log_event(self.MODULE, defect_id, "重新打开",
+                        {"operator": operator, "保留凭据编号":
+                            previous_credential.get("登记编号") if previous_credential else None})
+        return entry, ("缺陷已重新打开为草稿，原复检凭据保留可查；"
+                       "重复发起复检不会生成另一份有效关闭记录")
 
     def get_defects_by_batch(self, batch_no: str) -> list[dict[str, Any]]:
         """获取指定批次的不合格处置记录。"""

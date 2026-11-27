@@ -67,6 +67,7 @@
         <tr>
           <th v-for="column in meta.fields" :key="column">{{ column }}</th>
           <th>当前状态</th>
+          <th v-if="isDefectModule">复检凭据</th>
           <th>可执行动作</th>
         </tr>
       </thead>
@@ -74,6 +75,16 @@
         <tr v-for="row in rows" :key="String(row.id)" :data-testid="`row-${row.id}`" :data-status="String(row.status)">
           <td v-for="column in meta.fields" :key="column">{{ row[column] ?? '—' }}</td>
           <td>{{ row.status }}</td>
+          <td v-if="isDefectModule">
+            <button
+              class="link credential-link"
+              type="button"
+              :data-testid="`reinspect-${row.id}`"
+              @click="openReinspection(row)"
+            >
+              复检授权
+            </button>
+          </td>
           <td class="row-actions">
             <button
               v-for="action in meta.actions"
@@ -84,6 +95,15 @@
               @click="runAction(action, row)"
             >
               {{ action }}
+            </button>
+            <button
+              v-if="isDefectModule && row.status === '已确认'"
+              class="link reopen-link"
+              type="button"
+              :data-testid="`reopen-${row.id}`"
+              @click="reopenDefectRow(row)"
+            >
+              重新打开
             </button>
             <button
               v-if="row['批次号']"
@@ -103,7 +123,7 @@
           </td>
         </tr>
         <tr v-if="!rows.length">
-          <td :colspan="meta.fields.length + 2" class="empty-state">
+          <td :colspan="meta.fields.length + (isDefectModule ? 3 : 2)" class="empty-state">
             暂无{{ meta.name }}数据，可先登记{{ meta.entity }}
           </td>
         </tr>
@@ -145,6 +165,7 @@ import {
   runAction as applyAction,
 } from '@/api/backend-service'
 import { fetchTraceChain } from '@/api/pipeline-client'
+import { reopenDefect } from '@/api/reinspection-client'
 import type { EntryRow } from '@/data/types'
 
 const props = defineProps<{ moduleKey: string }>()
@@ -169,6 +190,7 @@ const PROCESS_NAMES: Record<string, string> = {
   trace_code: '溯源码段', shipment: '发运交接',
 }
 const isProcessModule = computed(() => PROCESS_ORDER.includes(meta.key))
+const isDefectModule = computed(() => meta.key === 'defect')
 // 批次追溯
 const showTrace = ref(false)
 const traceBatchNo = ref('')
@@ -280,6 +302,23 @@ function viewUpstream(row: EntryRow) {
   }
 }
 
+function openReinspection(row: EntryRow) {
+  // 跳转到复检授权工作台并限定目标缺陷，授权条只归属该缺陷，不与同巡查其他缺陷共享
+  void router.push({ name: 'reinspection', query: { defectId: String(row.id) } })
+}
+
+async function reopenDefectRow(row: EntryRow) {
+  errorMessage.value = ''
+  try {
+    // 重新打开为草稿，历史复检凭据保留可查，重复复检不会生成另一份有效关闭记录
+    const result = await reopenDefect(Number(row.id), '品控主管')
+    if (!result.ok) throw new Error(result.message)
+    await reload()
+  } catch (error) {
+    errorMessage.value = error instanceof Error ? error.message : '重新打开失败'
+  }
+}
+
 onMounted(reload)
 </script>
 
@@ -371,5 +410,18 @@ onMounted(reload)
 .trace-link:hover, .upstream-link:hover {
   background: #27ae60;
   color: white !important;
+}
+.credential-link, .reopen-link {
+  margin-left: 6px;
+  padding: 2px 6px;
+  font-size: 11px;
+  border: 1px solid #1f6feb;
+  border-radius: 3px;
+  text-decoration: none;
+  cursor: pointer;
+}
+.reopen-link {
+  border-color: #b45309;
+  color: #b45309 !important;
 }
 </style>

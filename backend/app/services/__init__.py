@@ -20,6 +20,7 @@ from app.services.shipment import ShipmentService
 from app.services.sample import SampleService
 from app.services.defect import DefectService
 from app.services.audit import AuditService
+from app.services.reinspection import ReinspectionService, reinspection
 
 SERVICES: dict[str, BaseModuleService] = {
     "tea_garden": TeaGardenService(),
@@ -40,6 +41,7 @@ SERVICES: dict[str, BaseModuleService] = {
     "sample": SampleService(),
     "defect": DefectService(),
     "audit": AuditService(),
+    "reinspection": reinspection,
 }
 
 
